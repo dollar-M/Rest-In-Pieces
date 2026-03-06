@@ -67,6 +67,6 @@
         "*.sln": "*.csproj",
         "*.slnx": "*.csproj"
     },
-    "dotnet.defaultSolution": "Rest-In-Pieces.slnx",
+    "dotnet.defaultSolution": "Rest-In-Pieces-main.slnx",
     "dotnet.enableWorkspaceBasedDevelopment": false
 }
