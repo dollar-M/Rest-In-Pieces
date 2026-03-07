@@ -62,7 +62,6 @@ public class PlayerMovement : MonoBehaviour
     [Header("General stuff")]
     public Transform groundCheck;
     public float groundCheckRadius = 0.2f;
-    public LayerMask groundLayer;
 
     private bool onGround = true;
 
@@ -99,10 +98,7 @@ public class PlayerMovement : MonoBehaviour
         }
 
         // Check if the player is on the ground
-        if (groundCheck != null)
-        {
-            onGround = CheckIfGrounded();
-        }
+        onGround = CheckIfGrounded();
 
         // Reset double jump when player lands
         if (onGround)
@@ -388,16 +384,6 @@ public class PlayerMovement : MonoBehaviour
         grappleLine.SetPosition(1, grapplePoint);
     }
 
-    void OnCollisionEnter2D(Collision2D collision)
-    {
-        Debug.Log("Hit: " + collision.gameObject.name);
-    }
-
-    void OnCollisionStay2D(Collision2D collision)
-    {
-        Debug.Log("Still touching: " + collision.gameObject.name);
-    }
-
     void SetPhaseCollision(bool ignoreCollision)
     {
         // Go through every phaseable object in the list
@@ -413,7 +399,27 @@ public class PlayerMovement : MonoBehaviour
     // This checks if the player is grounded on any solid collider
     bool CheckIfGrounded()
     {
-        Collider2D[] hits = Physics2D.OverlapCircleAll(groundCheck.position, groundCheckRadius);
+        if (playerCollider == null)
+            return false;
+
+        Vector2 checkCenter;
+        float checkRadius;
+
+        // Use the GroundCheck object if it exists
+        if (groundCheck != null)
+        {
+            checkCenter = groundCheck.position;
+            checkRadius = groundCheckRadius;
+        }
+        else
+        {
+            // Fallback to player feet if GroundCheck is missing
+            Bounds bounds = playerCollider.bounds;
+            checkCenter = new Vector2(bounds.center.x, bounds.min.y - 0.05f);
+            checkRadius = 0.12f;
+        }
+
+        Collider2D[] hits = Physics2D.OverlapCircleAll(checkCenter, checkRadius);
 
         foreach (Collider2D hit in hits)
         {
@@ -481,7 +487,13 @@ public class PlayerMovement : MonoBehaviour
     void OnDrawGizmosSelected()
     {
         // Draw the ground check
-        if (groundCheck != null)
+        if (playerCollider != null && groundCheck == null)
+        {
+            Bounds bounds = playerCollider.bounds;
+            Gizmos.color = Color.green;
+            Gizmos.DrawWireSphere(new Vector2(bounds.center.x, bounds.min.y - 0.05f), 0.12f);
+        }
+        else if (groundCheck != null)
         {
             Gizmos.color = Color.green;
             Gizmos.DrawWireSphere(groundCheck.position, groundCheckRadius);
