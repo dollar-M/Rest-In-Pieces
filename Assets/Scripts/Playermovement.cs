@@ -13,7 +13,7 @@ public class PlayerMovement : MonoBehaviour
         Torso,
         Head
     }
-
+    private Animator animator;
     private Rigidbody2D rb;
     private Collider2D playerCollider;
     private float moveInput;
@@ -68,7 +68,9 @@ public class PlayerMovement : MonoBehaviour
     public TMP_Text DebugText;
 
     void Start()
-    {
+    {   
+        // for animation
+        animator = GetComponent<Animator>();
         rb = GetComponent<Rigidbody2D>();
         playerCollider = GetComponent<Collider2D>();
         ChangePlayerStage(currentStage);
@@ -88,8 +90,14 @@ public class PlayerMovement : MonoBehaviour
 
     void Update()
     {
+        // for animation
         moveInput = Input.GetAxisRaw("Horizontal");
-
+        animator.SetFloat("Speed", Mathf.Abs(moveInput));
+        onGround = CheckIfGrounded();
+        animator.SetBool("OnGround", onGround);
+        
+        
+        
         // If current stage was changed in the inspector, update the stage settings
         if (currentStage != lastStage)
         {
@@ -163,6 +171,7 @@ public class PlayerMovement : MonoBehaviour
 
         UpdateGrappleLine();
         UpdateDebugText();
+        
     }
 
     void FixedUpdate()
@@ -255,6 +264,9 @@ public class PlayerMovement : MonoBehaviour
                 playerCanGrapple = true;
                 break;
         }
+        // Animator update
+        if(animator != null)
+            animator.SetInteger("Stage", (int)currentStage);
     }
 
     void StartPhasing()
@@ -311,7 +323,8 @@ public class PlayerMovement : MonoBehaviour
 
             if (hit.collider.transform.root == transform.root)
                 continue;
-
+            if (hit.collider.gameObject.name.Contains("tunnel"))
+                continue;
             validHit = hit;
             foundValidHit = true;
             break;
@@ -320,6 +333,7 @@ public class PlayerMovement : MonoBehaviour
         // If we hit nothing, do nothing
         if (!foundValidHit)
             return;
+        Debug.Log("Grappled to: " + validHit.collider.gameObject.name);
 
         isGrappling = true;
         grapplePoint = validHit.point;
