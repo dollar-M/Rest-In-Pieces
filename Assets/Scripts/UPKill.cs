@@ -1,7 +1,6 @@
 using UnityEngine;
-using UnityEngine.Tilemaps;
 
-public class UpdownKill : MonoBehaviour
+public class UPKill : MonoBehaviour
 {
     [SerializeField] private Rigidbody2D rigidBody;
     [SerializeField] private SpriteRenderer spriteRenderer;
@@ -33,14 +32,14 @@ public class UpdownKill : MonoBehaviour
             transform.position,
             Vector2.up,
             halfHeight + 0.1f,
-            LayerMask.GetMask("Ground")
+            LayerMask.GetMask("KillBlockLR")
         );
 
         bool hitDown = Physics2D.Raycast(
             transform.position,
             Vector2.down,
             halfHeight + 0.1f,
-            LayerMask.GetMask("Ground")
+            LayerMask.GetMask("KillBlockLR")
         );
 
         if (hitUp && currentDirection > 0)
@@ -51,8 +50,6 @@ public class UpdownKill : MonoBehaviour
         {
             currentDirection = 1;
         }
-
-        // Debug.DrawRay(transform.position, Vector2.up * (halfHeight + 0.1f), Color.red);
-        // Debug.DrawRay(transform.position, Vector2.down * (halfHeight + 0.1f), Color.red);
     }
+    
 }
