@@ -6,6 +6,8 @@ TagManager:
   tags:
   - Crystal
   - Floor
+  - Obstacle
+  - Booster
   layers:
   - Default
   - TransparentFX
