@@ -1,4 +1,3 @@
-using System;
 using System.Collections.Generic;
 using TMPro;
 using UnityEngine;
@@ -13,18 +12,21 @@ public class PlayerMovement : MonoBehaviour
         Torso,
         Head
     }
+
     private Animator animator;
     private Rigidbody2D rb;
     private Collider2D playerCollider;
+    private PhysicsMaterial2D runtimeNoFrictionMaterial;
+
     private float moveInput;
     private PlayerStage lastStage;
+    private float normalLinearDamping;
+    private float normalGravityScale;
 
-    // Our commonly used variables
-
-    [Header("Player form")]
+    [Header("Player Form")]
     public PlayerStage currentStage;
 
-    // We can start with 5, we can always change it
+    [Header("Movement")]
     public float moveSpeed = 5f;
 
     [Header("Phasing")]
@@ -41,44 +43,78 @@ public class PlayerMovement : MonoBehaviour
     [Header("Jumping")]
     public KeyCode jumpKeyBind = KeyCode.Space;
     public float jumpForce = 8f;
+    public float coyoteTime = 0.1f;
+    public float jumpBufferTime = 0.12f;
 
     private bool playerCanJump = false;
     private bool playerCanDoubleJump = false;
     private bool doubleJumpAvailable = false;
+    private float coyoteTimer = 0f;
+    private float jumpBufferTimer = 0f;
 
     [Header("Grappling Hook")]
     public KeyCode grappleBind = KeyCode.F;
     public float grappleDistance = 10f;
+    public float minimumGrappleDistance = 0.2f;
+    public float grappleLinearDamping = 6f;
+
     public DistanceJoint2D grappleJoint;
     public LineRenderer grappleLine;
+
     public bool isGrappling = false;
-    public bool grappledToRoof = false;
-    public bool grappledToWall = false;
     public bool playerCanGrapple = false;
 
     private Vector2 grapplePoint;
-    private Vector2 grappleDirection;
+    private Rigidbody2D grappledBody;
+    private MovingBlock grappledMovingBlock;
 
-    [Header("General stuff")]
+    [Header("Ground Check")]
     public Transform groundCheck;
     public float groundCheckRadius = 0.2f;
 
     private bool onGround = true;
+    private MovingBlock groundedMovingBlock;
 
+    [Header("Wall Check")]
+    public float wallCheckDistance = 0.08f;
+
+    [Range(0.1f, 1f)]
+    public float wallCheckHeightMultiplier = 0.8f;
+
+    public float wallCheckVerticalInset = 0.08f;
+
+    private bool touchingWallLeft;
+    private bool touchingWallRight;
+
+    [Header("Moving Platform Carry")]
+    [Tooltip("How much of the platform's horizontal movement gets added to the player while grounded.")]
+    public float groundedPlatformCarryMultiplier = 1f;
+
+    [Header("Debug")]
     public TMP_Text DebugText;
 
     void Start()
-    {   
-        // for animation
+    {
         animator = GetComponent<Animator>();
         rb = GetComponent<Rigidbody2D>();
         playerCollider = GetComponent<Collider2D>();
+
+        normalLinearDamping = rb.linearDamping;
+        normalGravityScale = rb.gravityScale;
+
+        rb.interpolation = RigidbodyInterpolation2D.Interpolate;
+        rb.collisionDetectionMode = CollisionDetectionMode2D.Continuous;
+
+        CreateAndApplyNoFrictionMaterial();
+
         ChangePlayerStage(currentStage);
         lastStage = currentStage;
 
         if (grappleJoint != null)
         {
             grappleJoint.enabled = false;
+            grappleJoint.autoConfigureDistance = false;
+            grappleJoint.autoConfigureConnectedAnchor = false;
         }
 
         if (grappleLine != null)
@@ -90,64 +126,70 @@ public class PlayerMovement : MonoBehaviour
 
     void Update()
     {
-        // for animation
         moveInput = Input.GetAxisRaw("Horizontal");
-        animator.SetFloat("Speed", Mathf.Abs(moveInput));
-        onGround = CheckIfGrounded();
-        animator.SetBool("OnGround", onGround);
-        
-        
-        
-        // If current stage was changed in the inspector, update the stage settings
+
+        if (GetInput(jumpKeyBind))
+            jumpBufferTimer = jumpBufferTime;
+        else
+            jumpBufferTimer -= Time.deltaTime;
+
+        onGround = CheckIfGrounded(out groundedMovingBlock);
+        UpdateWallContacts();
+
+        if (onGround)
+        {
+            coyoteTimer = coyoteTime;
+            doubleJumpAvailable = true;
+        }
+        else
+        {
+            coyoteTimer -= Time.deltaTime;
+        }
+
+        if (animator != null)
+        {
+            animator.SetFloat("Speed", isGrappling ? 0f : Mathf.Abs(moveInput));
+            animator.SetBool("OnGround", onGround);
+            animator.SetInteger("Stage", (int)currentStage);
+        }
+
         if (currentStage != lastStage)
         {
             ChangePlayerStage(currentStage);
             lastStage = currentStage;
         }
 
-        // Check if the player is on the ground
-        onGround = CheckIfGrounded();
-
-        // Reset double jump when player lands
-        if (onGround)
-        {
-            doubleJumpAvailable = true;
-        }
-
-        // Check if the player is a ghost, check if they click the phasing keybind
         if (GetInput(phaseKeyBind) && currentStage == PlayerStage.Ghost && !isPhasing && !phaseIsOnCooldown)
         {
             StartPhasing();
         }
 
-        // Normal jump from the ground
-        if (GetInput(jumpKeyBind) && playerCanJump && onGround && !isGrappling)
+        if (!isGrappling)
         {
-            Jump();
-        }
-        // Double jump in the air
-        else if (GetInput(jumpKeyBind) && playerCanJump && playerCanDoubleJump && !onGround && doubleJumpAvailable && !isGrappling)
-        {
-            Jump();
-            doubleJumpAvailable = false;
+            bool bufferedJump = jumpBufferTimer > 0f;
+
+            if (bufferedJump && playerCanJump && coyoteTimer > 0f)
+            {
+                Jump();
+                jumpBufferTimer = 0f;
+                coyoteTimer = 0f;
+            }
+            else if (bufferedJump && playerCanJump && playerCanDoubleJump && !onGround && doubleJumpAvailable)
+            {
+                Jump();
+                doubleJumpAvailable = false;
+                jumpBufferTimer = 0f;
+            }
         }
 
-        // Check if player clicks the grapple bind
         if (GetInput(grappleBind) && playerCanGrapple)
         {
             if (!isGrappling)
-            {
                 StartGrapple();
-                animator.SetBool("Grapple", true);
-            }
             else
-            {
-                animator.SetBool("Grapple", false);
                 StopGrapple();
-            }
         }
 
-        // If player is currently phasing, count the timer down
         if (isPhasing)
         {
             currentPhasingTimer -= Time.deltaTime;
@@ -158,12 +200,10 @@ public class PlayerMovement : MonoBehaviour
             }
         }
 
-        // If the phasing is on cooldown, count the timer down
         if (phaseIsOnCooldown && !isPhasing)
         {
             phaseCooldownTimer -= Time.deltaTime;
 
-            // if cooldown is finished
             if (phaseCooldownTimer <= 0f)
             {
                 phaseCooldownTimer = 0f;
@@ -173,77 +213,73 @@ public class PlayerMovement : MonoBehaviour
 
         UpdateGrappleLine();
         UpdateDebugText();
-        
     }
 
     void FixedUpdate()
     {
-        // If grappled to a wall, player can not move
-        if (isGrappling && grappledToWall)
+        if (isGrappling)
         {
-            rb.linearVelocity = new Vector2(0f, rb.linearVelocity.y);
+            // Do not manually carry while grappling.
+            // The DistanceJoint2D connectedBody already makes the anchor follow the moving block.
+            rb.linearVelocity = Vector2.zero;
             return;
         }
 
-        // If grappled to a roof, player can move side to side
-        if (isGrappling && grappledToRoof)
+        float platformCarryX = 0f;
+
+        // Only add horizontal carry while grounded.
+        // Do not MovePosition the player with the platform, because that causes sinking/sticking.
+        if (onGround && groundedMovingBlock != null)
         {
-            rb.linearVelocity = new Vector2(moveInput * moveSpeed, rb.linearVelocity.y);
-            return;
+            platformCarryX = groundedMovingBlock.DeltaThisFixedStep.x / Time.fixedDeltaTime;
+            platformCarryX *= groundedPlatformCarryMultiplier;
         }
 
-        rb.linearVelocity = new Vector2(moveInput * moveSpeed, rb.linearVelocity.y);
-    }
+        float targetXVelocity = (moveInput * moveSpeed) + platformCarryX;
 
-    private void UpdateDebugText()
-    {
-        if (DebugText == null)
-            return;
+        bool pushingIntoLeftWall = !onGround && touchingWallLeft && moveInput < 0f;
+        bool pushingIntoRightWall = !onGround && touchingWallRight && moveInput > 0f;
 
-        DebugText.text =
-            "Current Stage: " + currentStage +
-            "\nCan Jump: " + playerCanJump +
-            "\nCan Double Jump: " + playerCanDoubleJump +
-            "\nDouble Jump Available: " + doubleJumpAvailable +
-            "\nCan Grapple: " + playerCanGrapple +
-            "\nIs Phasing: " + isPhasing +
-            "\nPhase Timer: " + currentPhasingTimer +
-            "\nPhase Cooldown Timer: " + phaseCooldownTimer +
-            "\nPhase On Cooldown: " + phaseIsOnCooldown +
-            "\nPlayer on ground: " + onGround +
-            "\nIs Grappling: " + isGrappling +
-            "\nGrappled To Roof: " + grappledToRoof +
-            "\nGrappled To Wall: " + grappledToWall +
-            "\nPhaseable Objects Count: " + ObjectProperties.phaseableObjects.Count;
+        if (pushingIntoLeftWall || pushingIntoRightWall)
+        {
+            targetXVelocity = platformCarryX;
+
+            if ((pushingIntoLeftWall && rb.linearVelocity.x < platformCarryX) ||
+                (pushingIntoRightWall && rb.linearVelocity.x > platformCarryX))
+            {
+                rb.linearVelocity = new Vector2(targetXVelocity, rb.linearVelocity.y);
+                return;
+            }
+        }
+
+        rb.linearVelocity = new Vector2(targetXVelocity, rb.linearVelocity.y);
     }
 
     void Jump()
     {
-        // Do all the stuff to make the player jump
         rb.linearVelocity = new Vector2(rb.linearVelocity.x, jumpForce);
     }
 
-    // This just changes the player stages
     public void ChangePlayerStage(PlayerStage stage)
     {
         currentStage = stage;
 
-        // Reset what the player can do
         playerCanPhase = false;
         playerCanJump = false;
         playerCanDoubleJump = false;
         playerCanGrapple = false;
-
-        // Reset double jump state
         doubleJumpAvailable = false;
 
-        // If we are not ghost anymore, stop phasing
         if (currentStage != PlayerStage.Ghost)
         {
             StopPhasing();
         }
 
-        // Set what this stage is allowed to do
+        if (currentStage != PlayerStage.Arm && currentStage != PlayerStage.Torso && isGrappling)
+        {
+            StopGrapple();
+        }
+
         switch (currentStage)
         {
             case PlayerStage.Ghost:
@@ -255,8 +291,8 @@ public class PlayerMovement : MonoBehaviour
                 break;
 
             case PlayerStage.Arm:
-                playerCanGrapple = true;
                 playerCanJump = true;
+                playerCanGrapple = true;
                 break;
 
             case PlayerStage.Torso:
@@ -266,39 +302,34 @@ public class PlayerMovement : MonoBehaviour
                 playerCanGrapple = true;
                 break;
         }
-        // Animator update
-        if(animator != null)
-            animator.SetInteger("Stage", (int)currentStage);
     }
 
     void StartPhasing()
     {
-        // Do all the stuff to start phasing
         isPhasing = true;
         currentPhasingTimer = phaseDuration;
         playerCanPhase = true;
-
         SetPhaseCollision(true);
     }
 
     void StopPhasing()
     {
-        // Do all the stuff to stop phasing
+        if (!isPhasing && currentPhasingTimer <= 0f)
+            return;
+
         isPhasing = false;
         currentPhasingTimer = 0f;
         playerCanPhase = false;
 
         SetPhaseCollision(false);
 
-        // Set the phase on cooldown
         phaseIsOnCooldown = true;
         phaseCooldownTimer = phaseCooldown;
     }
 
     void StartGrapple()
     {
-        // If the grapple joint is missing, do nothing
-        if (grappleJoint == null)
+        if (grappleJoint == null || rb == null || playerCollider == null)
             return;
 
         if (Camera.main == null)
@@ -307,10 +338,8 @@ public class PlayerMovement : MonoBehaviour
         Vector3 mouseWorldPosition = Camera.main.ScreenToWorldPoint(Input.mousePosition);
         mouseWorldPosition.z = 0f;
 
-        // Fire the grapple as a straight line in the direction of the mouse
-        grappleDirection = ((Vector2)mouseWorldPosition - (Vector2)transform.position).normalized;
-
-        RaycastHit2D[] hits = Physics2D.RaycastAll(transform.position, grappleDirection, grappleDistance);
+        Vector2 direction = ((Vector2)mouseWorldPosition - (Vector2)transform.position).normalized;
+        RaycastHit2D[] hits = Physics2D.RaycastAll(transform.position, direction, grappleDistance);
 
         RaycastHit2D validHit = default;
         bool foundValidHit = false;
@@ -323,64 +352,73 @@ public class PlayerMovement : MonoBehaviour
             if (hit.collider == playerCollider)
                 continue;
 
-            if (hit.collider.transform.root == transform.root)
+            if (hit.transform == transform || hit.transform.IsChildOf(transform))
                 continue;
+
+            if (hit.collider.isTrigger)
+                continue;
+
             if (hit.collider.gameObject.name.Contains("tunnel"))
                 continue;
+
             validHit = hit;
             foundValidHit = true;
             break;
         }
 
-        // If we hit nothing, do nothing
         if (!foundValidHit)
             return;
-        Debug.Log("Grappled to: " + validHit.collider.gameObject.name);
+
+        float distanceToPoint = Vector2.Distance(transform.position, validHit.point);
+
+        if (distanceToPoint < minimumGrappleDistance)
+            return;
 
         isGrappling = true;
         grapplePoint = validHit.point;
+        grappledBody = validHit.rigidbody;
+        grappledMovingBlock = validHit.collider.GetComponentInParent<MovingBlock>();
+
+        rb.linearVelocity = Vector2.zero;
+        rb.linearDamping = grappleLinearDamping;
+        rb.gravityScale = 0f;
 
         grappleJoint.enabled = true;
-        grappleJoint.connectedAnchor = grapplePoint;
-        grappleJoint.autoConfigureDistance = false;
-        grappleJoint.distance = Vector2.Distance(transform.position, grapplePoint);
+        grappleJoint.distance = distanceToPoint;
 
-        // Reset grapple type first
-        grappledToRoof = false;
-        grappledToWall = false;
-
-        // Roof = surface facing downward
-        if (validHit.normal.y < -0.7f)
+        if (grappledBody != null)
         {
-            grappledToRoof = true;
-        }
-        // Wall = surface facing left or right
-        else if (Mathf.Abs(validHit.normal.x) > 0.7f)
-        {
-            grappledToWall = true;
-            rb.linearVelocity = Vector2.zero;
+            grappleJoint.connectedBody = grappledBody;
+            grappleJoint.connectedAnchor = grappledBody.transform.InverseTransformPoint(validHit.point);
         }
         else
         {
-            // If it is not really a roof or wall, just retract immediately
-            StopGrapple();
+            grappleJoint.connectedBody = null;
+            grappleJoint.connectedAnchor = validHit.point;
         }
     }
 
     void StopGrapple()
     {
         isGrappling = false;
-        grappledToRoof = false;
-        grappledToWall = false;
+        grappledBody = null;
+        grappledMovingBlock = null;
 
         if (grappleJoint != null)
         {
             grappleJoint.enabled = false;
+            grappleJoint.connectedBody = null;
         }
 
         if (grappleLine != null)
         {
             grappleLine.enabled = false;
+        }
+
+        if (rb != null)
+        {
+            rb.linearDamping = normalLinearDamping;
+            rb.gravityScale = normalGravityScale;
         }
     }
 
@@ -395,14 +433,37 @@ public class PlayerMovement : MonoBehaviour
             return;
         }
 
+        Vector2 endPoint = grapplePoint;
+
+        if (grappleJoint != null && grappleJoint.connectedBody != null)
+        {
+            endPoint = grappleJoint.connectedBody.transform.TransformPoint(grappleJoint.connectedAnchor);
+            grapplePoint = endPoint;
+        }
+        else if (grappleJoint != null)
+        {
+            endPoint = grappleJoint.connectedAnchor;
+            grapplePoint = endPoint;
+        }
+
         grappleLine.enabled = true;
         grappleLine.SetPosition(0, transform.position);
-        grappleLine.SetPosition(1, grapplePoint);
+        grappleLine.SetPosition(1, endPoint);
+    }
+
+    void CreateAndApplyNoFrictionMaterial()
+    {
+        if (playerCollider == null)
+            return;
+
+        runtimeNoFrictionMaterial = new PhysicsMaterial2D("PlayerNoFrictionRuntime");
+        runtimeNoFrictionMaterial.friction = 0f;
+        runtimeNoFrictionMaterial.bounciness = 0f;
+        playerCollider.sharedMaterial = runtimeNoFrictionMaterial;
     }
 
     void SetPhaseCollision(bool ignoreCollision)
     {
-        // Go through every phaseable object in the list
         foreach (Collider2D objectCollider in GetAllPhaseableColliders())
         {
             if (objectCollider == null || playerCollider == null)
@@ -412,16 +473,16 @@ public class PlayerMovement : MonoBehaviour
         }
     }
 
-    // This checks if the player is grounded on any solid collider
-    bool CheckIfGrounded()
+    bool CheckIfGrounded(out MovingBlock movingBlockUnderPlayer)
     {
+        movingBlockUnderPlayer = null;
+
         if (playerCollider == null)
             return false;
 
         Vector2 checkCenter;
         float checkRadius;
 
-        // Use the GroundCheck object if it exists
         if (groundCheck != null)
         {
             checkCenter = groundCheck.position;
@@ -429,7 +490,6 @@ public class PlayerMovement : MonoBehaviour
         }
         else
         {
-            // Fallback to player feet if GroundCheck is missing
             Bounds bounds = playerCollider.bounds;
             checkCenter = new Vector2(bounds.center.x, bounds.min.y - 0.05f);
             checkRadius = 0.12f;
@@ -442,15 +502,60 @@ public class PlayerMovement : MonoBehaviour
             if (hit == null)
                 continue;
 
-            // Ignore the player collider
             if (hit == playerCollider)
                 continue;
 
-            // Ignore colliders that belong to the player or the player's children
-            if (hit.transform.root == transform.root)
+            if (hit.transform == transform || hit.transform.IsChildOf(transform))
                 continue;
 
-            // Ignore trigger colliders
+            if (hit.isTrigger)
+                continue;
+
+            movingBlockUnderPlayer = hit.GetComponentInParent<MovingBlock>();
+            return true;
+        }
+
+        return false;
+    }
+
+    void UpdateWallContacts()
+    {
+        touchingWallLeft = CheckWallSide(Vector2.left);
+        touchingWallRight = CheckWallSide(Vector2.right);
+    }
+
+    bool CheckWallSide(Vector2 direction)
+    {
+        if (playerCollider == null)
+            return false;
+
+        Bounds bounds = playerCollider.bounds;
+
+        float boxWidth = wallCheckDistance;
+        float boxHeight = bounds.size.y * wallCheckHeightMultiplier;
+        Vector2 boxSize = new Vector2(boxWidth, boxHeight);
+
+        float xOffset = bounds.extents.x + (boxWidth * 0.5f);
+        float yOffset = wallCheckVerticalInset;
+
+        Vector2 checkCenter = new Vector2(
+            bounds.center.x + (direction.x * xOffset),
+            bounds.center.y + yOffset
+        );
+
+        Collider2D[] hits = Physics2D.OverlapBoxAll(checkCenter, boxSize, 0f);
+
+        foreach (Collider2D hit in hits)
+        {
+            if (hit == null)
+                continue;
+
+            if (hit == playerCollider)
+                continue;
+
+            if (hit.transform == transform || hit.transform.IsChildOf(transform))
+                continue;
+
             if (hit.isTrigger)
                 continue;
 
@@ -482,7 +587,7 @@ public class PlayerMovement : MonoBehaviour
                 if (objectCollider == playerCollider)
                     continue;
 
-                if (objectCollider.transform.root == transform.root)
+                if (objectCollider.transform == transform || objectCollider.transform.IsChildOf(transform))
                     continue;
 
                 colliders.Add(objectCollider);
@@ -492,27 +597,55 @@ public class PlayerMovement : MonoBehaviour
         return colliders;
     }
 
-    // This is just to save writing some shit
     private bool GetInput(KeyCode key)
     {
-        if (Input.GetKeyDown(key))
-            return true;
-        return false;
+        return Input.GetKeyDown(key);
+    }
+
+    void UpdateDebugText()
+    {
+        if (DebugText == null)
+            return;
+
+        DebugText.text =
+            "Current Stage: " + currentStage +
+            "\nOn Ground: " + onGround +
+            "\nGrounded Moving Block: " + (groundedMovingBlock != null ? groundedMovingBlock.name : "None") +
+            "\nIs Grappling: " + isGrappling +
+            "\nGrappled Moving Block: " + (grappledMovingBlock != null ? grappledMovingBlock.name : "None") +
+            "\nVelocity: " + rb.linearVelocity +
+            "\nGrapple Point: " + grapplePoint;
     }
 
     void OnDrawGizmosSelected()
     {
-        // Draw the ground check
+        Gizmos.color = Color.green;
+
         if (playerCollider != null && groundCheck == null)
         {
             Bounds bounds = playerCollider.bounds;
-            Gizmos.color = Color.green;
             Gizmos.DrawWireSphere(new Vector2(bounds.center.x, bounds.min.y - 0.05f), 0.12f);
         }
         else if (groundCheck != null)
         {
-            Gizmos.color = Color.green;
             Gizmos.DrawWireSphere(groundCheck.position, groundCheckRadius);
+        }
+
+        if (playerCollider != null)
+        {
+            Bounds bounds = playerCollider.bounds;
+
+            float boxWidth = wallCheckDistance;
+            float boxHeight = bounds.size.y * wallCheckHeightMultiplier;
+            float xOffset = bounds.extents.x + (boxWidth * 0.5f);
+
+            Vector2 size = new Vector2(boxWidth, boxHeight);
+            Vector2 leftCenter = new Vector2(bounds.center.x - xOffset, bounds.center.y + wallCheckVerticalInset);
+            Vector2 rightCenter = new Vector2(bounds.center.x + xOffset, bounds.center.y + wallCheckVerticalInset);
+
+            Gizmos.color = Color.yellow;
+            Gizmos.DrawWireCube(leftCenter, size);
+            Gizmos.DrawWireCube(rightCenter, size);
         }
     }
 }
