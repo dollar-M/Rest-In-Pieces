@@ -186,6 +186,12 @@ public class PlayerMovement : MonoBehaviour
         {
             if (!isGrappling)
                 StartGrapple();
+                animator.SetBool("Grapple", true);
+            }
+            else
+            {
+                animator.SetBool("Grapple", false);
+            StopGrapple();
             else
                 StopGrapple();
         }
