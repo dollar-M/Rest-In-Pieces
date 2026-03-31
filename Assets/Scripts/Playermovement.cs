@@ -192,6 +192,8 @@ public class PlayerMovement : MonoBehaviour
             {
                 animator.SetBool("Grapple", false);
             StopGrapple();
+            else
+                StopGrapple();
         }
 
         if (isPhasing)
