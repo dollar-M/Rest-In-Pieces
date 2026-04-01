@@ -53,10 +53,18 @@ public class PlayerMovement : MonoBehaviour
     private float jumpBufferTimer = 0f;
 
     [Header("Grappling Hook")]
-    public KeyCode grappleBind = KeyCode.F;
+    public KeyCode grappleBind = KeyCode.C;
     public float grappleDistance = 10f;
     public float minimumGrappleDistance = 0.2f;
-    public float grappleLinearDamping = 6f;
+
+    [Tooltip("Lower feels looser / more natural while grappling.")]
+    public float grappleLinearDamping = 0f;
+
+    [Tooltip("Extra rope length added when grappling a moving rigidbody so you dangle instead of getting dragged sideways.")]
+    public float movingBodyGrappleSlack = 1f;
+
+    [Tooltip("Maximum final grapple length after slack is applied.")]
+    public float maxFinalGrappleDistance = 1.75f;
 
     public DistanceJoint2D grappleJoint;
     public LineRenderer grappleLine;
@@ -66,7 +74,7 @@ public class PlayerMovement : MonoBehaviour
 
     private Vector2 grapplePoint;
     private Rigidbody2D grappledBody;
-    private MovingBlock grappledMovingBlock;
+    private float currentGrappleDistance;
 
     [Header("Ground Check")]
     public Transform groundCheck;
@@ -115,6 +123,7 @@ public class PlayerMovement : MonoBehaviour
             grappleJoint.enabled = false;
             grappleJoint.autoConfigureDistance = false;
             grappleJoint.autoConfigureConnectedAnchor = false;
+            grappleJoint.maxDistanceOnly = true;
         }
 
         if (grappleLine != null)
@@ -185,15 +194,19 @@ public class PlayerMovement : MonoBehaviour
         if (GetInput(grappleBind) && playerCanGrapple)
         {
             if (!isGrappling)
+            {
                 StartGrapple();
-                animator.SetBool("Grapple", true);
+
+                if (animator != null)
+                    animator.SetBool("Grapple", true);
             }
             else
             {
-                animator.SetBool("Grapple", false);
-            StopGrapple();
-            else
                 StopGrapple();
+
+                if (animator != null)
+                    animator.SetBool("Grapple", false);
+            }
         }
 
         if (isPhasing)
@@ -225,16 +238,12 @@ public class PlayerMovement : MonoBehaviour
     {
         if (isGrappling)
         {
-            // Do not manually carry while grappling.
-            // The DistanceJoint2D connectedBody already makes the anchor follow the moving block.
-            rb.linearVelocity = Vector2.zero;
+            // Let gravity + the joint handle grapple motion naturally.
             return;
         }
 
         float platformCarryX = 0f;
 
-        // Only add horizontal carry while grounded.
-        // Do not MovePosition the player with the platform, because that causes sinking/sticking.
         if (onGround && groundedMovingBlock != null)
         {
             platformCarryX = groundedMovingBlock.DeltaThisFixedStep.x / Time.fixedDeltaTime;
@@ -383,14 +392,30 @@ public class PlayerMovement : MonoBehaviour
         isGrappling = true;
         grapplePoint = validHit.point;
         grappledBody = validHit.rigidbody;
-        grappledMovingBlock = validHit.collider.GetComponentInParent<MovingBlock>();
 
-        rb.linearVelocity = Vector2.zero;
+        bool targetIsMovingBody =
+            grappledBody != null &&
+            grappledBody.bodyType != RigidbodyType2D.Static;
+
+        rb.gravityScale = normalGravityScale;
         rb.linearDamping = grappleLinearDamping;
-        rb.gravityScale = 0f;
+
+        currentGrappleDistance = distanceToPoint;
+
+        if (targetIsMovingBody)
+        {
+            currentGrappleDistance += movingBodyGrappleSlack;
+        }
+
+        currentGrappleDistance = Mathf.Clamp(
+            currentGrappleDistance,
+            minimumGrappleDistance,
+            maxFinalGrappleDistance
+        );
 
         grappleJoint.enabled = true;
-        grappleJoint.distance = distanceToPoint;
+        grappleJoint.maxDistanceOnly = true;
+        grappleJoint.distance = currentGrappleDistance;
 
         if (grappledBody != null)
         {
@@ -408,7 +433,7 @@ public class PlayerMovement : MonoBehaviour
     {
         isGrappling = false;
         grappledBody = null;
-        grappledMovingBlock = null;
+        currentGrappleDistance = 0f;
 
         if (grappleJoint != null)
         {
@@ -618,7 +643,8 @@ public class PlayerMovement : MonoBehaviour
             "\nOn Ground: " + onGround +
             "\nGrounded Moving Block: " + (groundedMovingBlock != null ? groundedMovingBlock.name : "None") +
             "\nIs Grappling: " + isGrappling +
-            "\nGrappled Moving Block: " + (grappledMovingBlock != null ? grappledMovingBlock.name : "None") +
+            "\nGrappled Body: " + (grappledBody != null ? grappledBody.name : "None") +
+            "\nCurrent Grapple Distance: " + currentGrappleDistance +
             "\nVelocity: " + rb.linearVelocity +
             "\nGrapple Point: " + grapplePoint;
     }
